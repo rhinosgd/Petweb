@@ -1,0 +1,13 @@
+node_modules
+.next
+out
+build
+
+# .env 已纳入版本控制（演示模式配置，无敏感信息，便于跨设备直接运行）
+# 若将来填入真实密钥，请改为忽略并改用 .env.example 模板
+.env.local
+.env.production
+
+*.log
+.DS_Store
+next-env.d.ts
