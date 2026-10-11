@@ -1,0 +1,246 @@
+// Prisma schema for pet-craft-store
+// 宠物 + 手工 外贸独立站（Next.js 全栈自建）
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============ 支付网关 ============
+enum PaymentGateway {
+  STRIPE
+  PAYPAL
+  OCEANPAYMENT // 钱海
+  WINTOPAY
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+// ============ 管理员 ============
+model AdminUser {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String // bcrypt hash
+  createdAt DateTime @default(now())
+}
+
+// ============ 站点内容（前台可编辑）============
+model PageSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique // 如 home.hero.title / home.hero.image / site.logo
+  value     String   @db.Text
+  group     String   @default("general") // home / about / footer / general
+  updatedAt DateTime @updatedAt
+}
+
+// ============ 商品 ============
+model Product {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  description String   @db.Text
+  price       Int // 以最小货币单位存储（分）
+  currency    String   @default("USD")
+  images      String[] // 图片 URL 列表
+  // 可选配色：JSON 形如 [{ "name": "Tan", "hex": "#b98a5a" }]
+  colors      Json?
+  // 可选尺码：["S", "M", "L"]
+  sizes       String[] @default([])
+  // 卖点清单（maxbone "Features" 区）
+  features    String[] @default([])
+  // "Why We Made This" 区块文案
+  whyMade     String?  @db.Text
+  // 保养说明（maxbone "Care" 区）
+  care        String?  @db.Text
+  category    String   @default("accessories")
+  stock       Int      @default(0)
+  // 手工定制字段
+  customizable Boolean @default(false)
+  customNote   String? @db.Text
+  featured     Boolean @default(false)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orderItems OrderItem[]
+}
+
+// ============ 博客 ============
+model Post {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  title     String
+  excerpt   String   @db.Text
+  content   String   @db.Text
+  cover     String?
+  published Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============ 支付配置（后台可开关与填密钥）============
+model PaymentConfig {
+  id                String         @id @default(cuid())
+  gateway           PaymentGateway @unique
+  enabled           Boolean        @default(false)
+  displayName       String // 前台展示名，如 "Credit Card (Stripe)"
+  currencies        String[]       @default(["USD"])
+  // 通用密钥字段（不同网关按需使用）
+  apiKey            String?
+  secret            String?
+  merchantId        String?
+  terminal          String?
+  secureCode        String?
+  gatewayUrl        String?
+  extraConfig       Json?
+  updatedAt         DateTime       @updatedAt
+}
+
+// ============ 订单 ============
+model Order {
+  id            String         @id @default(cuid())
+  orderNo       String         @unique
+  email         String
+  name          String?
+  country       String?
+  address       String?        @db.Text
+  amount        Int // 总额（分）
+  currency      String         @default("USD")
+  status        OrderStatus    @default(PENDING)
+  gateway       PaymentGateway
+  gatewayTxnId  String? // 支付商交易号
+  gatewayRaw    Json? // 原始回调数据，便于排查
+  paidAt        DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  items OrderItem[]
+
+  @@index([orderNo])
+  @@index([email])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  productId String?
+  title     String
+  price     Int
+  quantity  Int     @default(1)
+  customText String? // 定制刻字/图案说明
+  style     String? // 款式变量（结算页选择）
+  size      String? // 尺码变量（结算页选择）
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+// ============ 定做询价工单（Custom Made）============
+enum CustomStatus {
+  PENDING_QUOTE // 客户已提交，等待后台报价
+  QUOTED // 后台已报价，等待客户决定（= 客户端「等待付款」）
+  ACCEPTED // 客户接受报价，已生成待付款订单
+  DECLINED // 客户拒绝报价
+}
+
+model CustomRequest {
+  id          String       @id @default(cuid())
+  orderNo     String       @unique // 客户查询用单号，如 CR202610111930001234
+  productId   String?
+  productSlug String
+  productTitle String
+  // 客户填写的定做基本信息
+  material    String
+  color       String
+  dimensions  String
+  description String       @db.Text
+  email       String
+  phone       String?
+  // 附件：{ name, size, type, url }[]
+  attachments Json         @default("[]")
+  // 后台报价
+  quotedAmount Int?        // 报价金额（分）
+  quotedNote   String?     @db.Text
+  quotedAt     DateTime?
+  // 客户响应
+  status        CustomStatus @default(PENDING_QUOTE)
+  declineReason String?      @db.Text
+  respondedAt   DateTime?
+  // 生成的实际订单号（客户接受后）
+  linkedOrderNo String?
+  // 事件时间线：{ at, actor, event, note }[]
+  timeline      Json         @default("[]")
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([email])
+  @@index([orderNo])
+  @@index([status])
+}
+
+/// 访问与转化事件（埋点表）。
+/// 当前 DEMO 模式不采集，仅预留结构；上线后在页面挂 trackEvent() 即可累积真实数据。
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  /// 事件类型
+  type      EventType
+  /// 会话标识（匿名 cookie，用于去重与漏斗归因）
+  sessionId String?
+  /// 访客标识（同一浏览器长期标识）
+  visitorId String?
+  /// 转化归因：该次访问最终是否产生订单
+  orderNo   String?
+  /// 流量来源渠道
+  channel   Channel  @default(DIRECT)
+  /// 渠道细节：具体搜索关键词 / 图片或视频投放位 / 引荐站点
+  source    String?  @db.Text
+  /// 国家（由请求头或 IP 解析）
+  country   String?
+  /// 落地页路径
+  path      String?
+  /// 商品标识（若事件与某商品相关）
+  productId String?
+  /// 附加信息
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([type])
+  @@index([createdAt])
+  @@index([channel])
+  @@index([country])
+  @@index([orderNo])
+}
+
+/// 事件类型
+enum EventType {
+  PAGE_VIEW
+  PRODUCT_VIEW
+  ADD_TO_CART
+  CHECKOUT_START
+  ORDER_PLACED
+}
+
+/// 流量渠道
+enum Channel {
+  DIRECT
+  SEARCH_KEYWORD
+  IMAGE_AD
+  VIDEO_AD
+  SOCIAL
+  REFERRAL
+  EMAIL
+  OTHER
+}
